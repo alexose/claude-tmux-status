@@ -49,7 +49,7 @@ shell:
 
 | Variable                   | Default | Meaning                                                                                 |
 | -------------------------- | ------- | --------------------------------------------------------------------------------------- |
-| `CLAUDE_TMUX_SOUND`        | `Glass` | A macOS system-sound name (see `/System/Library/Sounds`), a path to a sound file, or `off` to disable. |
+| `CLAUDE_TMUX_SOUND`        | `Pop`   | A macOS system-sound name (see `/System/Library/Sounds`), a path to a sound file, or `off` to disable. |
 | `CLAUDE_TMUX_TERMINAL_APP` | *(auto)* | Comma-separated app name(s) that count as "your terminal", e.g. `iTerm2` or `Ghostty,Code`. |
 
 `CLAUDE_TMUX_TERMINAL_APP` exists because tmux overwrites `$TERM_PROGRAM`, so the

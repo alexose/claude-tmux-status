@@ -91,7 +91,7 @@ should_play_sound() {
 }
 
 play_done_sound() {
-    local snd="${CLAUDE_TMUX_SOUND:-Glass}"
+    local snd="${CLAUDE_TMUX_SOUND:-Pop}"
     [ "$snd" = "off" ] && return 0
     [ -f "$snd" ] || snd="/System/Library/Sounds/${snd}.aiff"
     [ -f "$snd" ] || return 0
