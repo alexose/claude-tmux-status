@@ -42,6 +42,63 @@ clear_style() {
     tmux set-window-option -t "$WINDOW_ID" -u window-status-style
 }
 
+# --- "done" sound, played only when you're NOT looking at this window ---------
+#
+# Config (all optional, via environment):
+#   CLAUDE_TMUX_SOUND         Sound to play. A path, a bare macOS system-sound
+#                             name (e.g. "Glass"), or "off" to disable.
+#                             Default: Glass.
+#   CLAUDE_TMUX_TERMINAL_APP  Comma-separated macOS app name(s) to treat as
+#                             "your terminal" (e.g. "iTerm2" or "Ghostty,Code").
+#                             Auto-falls back to a list of common terminals —
+#                             needed because tmux overwrites $TERM_PROGRAM, so we
+#                             can't reliably auto-detect the host terminal.
+#
+# macOS only (uses lsappinfo + afplay); a silent no-op elsewhere.
+
+frontmost_app() {
+    lsappinfo info -only name "$(lsappinfo front 2>/dev/null)" 2>/dev/null \
+        | sed -n 's/.*="\(.*\)"$/\1/p'
+}
+
+frontmost_is_terminal() {
+    local front="$1"
+    [ -z "$front" ] && return 1
+    if [ -n "$CLAUDE_TMUX_TERMINAL_APP" ]; then
+        case ",$CLAUDE_TMUX_TERMINAL_APP," in
+            *",$front,"*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    case "$front" in
+        iTerm2|Terminal|Ghostty|WezTerm|Alacritty|kitty|Kitty|Hyper|Warp|\
+        Code|Cursor|Tabby|Rio|rio|Terminus)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# True (0) when a sound should play: you're not currently looking at the window
+# Claude just finished in — either your terminal isn't frontmost, or it is but a
+# different tmux window is active.
+should_play_sound() {
+    [ "$(uname)" = "Darwin" ] || return 1
+    frontmost_is_terminal "$(frontmost_app)" || return 0
+    local active
+    active=$(tmux display-message -t "$WINDOW_ID" -p '#{window_active}' 2>/dev/null)
+    [ "$active" = "1" ] && return 1   # frontmost terminal AND this window active
+    return 0
+}
+
+play_done_sound() {
+    local snd="${CLAUDE_TMUX_SOUND:-Glass}"
+    [ "$snd" = "off" ] && return 0
+    [ -f "$snd" ] || snd="/System/Library/Sounds/${snd}.aiff"
+    [ -f "$snd" ] || return 0
+    command -v afplay >/dev/null 2>&1 || return 0
+    afplay "$snd" >/dev/null 2>&1 &   # detached so the hook returns immediately
+}
+
 case "$EVENT" in
     SessionStart)
         # tmux's automatic-rename names a window after its foreground process.
@@ -76,6 +133,8 @@ case "$EVENT" in
             rm -f "$SAVE_FILE"
             tmux rename-window -t "$WINDOW_ID" "$ORIGINAL"
         fi
+        # Chime — but only when you're not already watching this window.
+        should_play_sound && play_done_sound
         ;;
     SessionEnd)
         # Clear all styling when Claude Code exits

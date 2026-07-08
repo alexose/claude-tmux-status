@@ -36,6 +36,28 @@ running in (via `$TMUX_PANE`), and calls `tmux rename-window` /
 All styling is applied dynamically by the script — **no `.tmux.conf` changes are
 required**.
 
+## Sound when Claude finishes (macOS)
+
+When Claude finishes (the window turns green), the hook can play a sound — but
+**only if you're not already looking at that window**. If your terminal is
+frontmost *and* Claude's tmux window is the active one, it stays silent; if
+you're in another app, or another tmux window, it chimes.
+
+It's on by default on macOS (uses `lsappinfo` + `afplay`) and a no-op elsewhere.
+Configure via environment variables in your `~/.claude/settings.json` env or
+shell:
+
+| Variable                   | Default | Meaning                                                                                 |
+| -------------------------- | ------- | --------------------------------------------------------------------------------------- |
+| `CLAUDE_TMUX_SOUND`        | `Glass` | A macOS system-sound name (see `/System/Library/Sounds`), a path to a sound file, or `off` to disable. |
+| `CLAUDE_TMUX_TERMINAL_APP` | *(auto)* | Comma-separated app name(s) that count as "your terminal", e.g. `iTerm2` or `Ghostty,Code`. |
+
+`CLAUDE_TMUX_TERMINAL_APP` exists because tmux overwrites `$TERM_PROGRAM`, so the
+host terminal can't be auto-detected. Without it, the hook matches the frontmost
+app against a built-in list of common terminals (iTerm2, Terminal, Ghostty,
+WezTerm, Alacritty, kitty, Warp, Code, Cursor, …). Set it if you use a terminal
+that isn't recognized, or run more than one.
+
 ## Requirements
 
 - [tmux](https://github.com/tmux/tmux)
