@@ -1,5 +1,13 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/tmux-status.sh" }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": "",

@@ -35,7 +35,7 @@ jq -s '
       .hooks[$e] = ((.hooks[$e] // []) +
         (if any((.hooks[$e] // [])[]?; .hooks[]?.command == "~/.claude/hooks/tmux-status.sh")
          then [] else [{matcher:"", hooks:[{type:"command", command:"~/.claude/hooks/tmux-status.sh"}]}] end)));
-  .[0] | add_hook(["UserPromptSubmit","PreToolUse","Stop","Notification","SessionEnd"])
+  .[0] | add_hook(["SessionStart","UserPromptSubmit","PreToolUse","Stop","Notification","SessionEnd"])
 ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 
 echo "Done. Restart any running Claude Code sessions to pick up the hooks."

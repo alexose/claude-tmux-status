@@ -43,10 +43,22 @@ clear_style() {
 }
 
 case "$EVENT" in
+    SessionStart)
+        # tmux's automatic-rename names a window after its foreground process.
+        # Claude Code sets its process title to its version (e.g. "2.1.204"), so
+        # tmux would name the window that until our first rename fires. Turn it
+        # off up front so the window keeps its real name and our states stick.
+        tmux set-window-option -t "$WINDOW_ID" automatic-rename off
+        ;;
     UserPromptSubmit)
-        # Save original window name before we start changing it
+        # Save original window name before we start changing it. Guard against a
+        # name tmux already auto-set to Claude's process title (== pane command),
+        # so we never restore "2.1.204" as the "original" name.
         if [ ! -f "$SAVE_FILE" ]; then
-            tmux display-message -t "$WINDOW_ID" -p '#W' > "$SAVE_FILE"
+            CURRENT=$(tmux display-message -t "$WINDOW_ID" -p '#W')
+            CMD=$(tmux display-message -t "$WINDOW_ID" -p '#{pane_current_command}')
+            [ "$CURRENT" = "$CMD" ] && CURRENT="zsh"
+            printf '%s' "$CURRENT" > "$SAVE_FILE"
         fi
         tmux rename-window -t "$WINDOW_ID" "thinking..."
         set_active
