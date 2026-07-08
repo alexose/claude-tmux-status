@@ -6,6 +6,8 @@ When Claude is running inside a tmux window, this hook renames and recolors that
 window's entry in the status bar to reflect Claude's live state — so you can tell
 at a glance which of your windows is thinking, running a tool, or waiting on you.
 
+![Demo of the tmux status bar tracking Claude Code's live state](demo.gif)
+
 ```
 [0] 0:dash  1:b  2:mage  3:other  4:zsh  5:django  6:bash  7:zsh  8:zsh  9:bash*
                                                             └─ green = Claude finished, waiting on you
