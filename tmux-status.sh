@@ -108,7 +108,16 @@ play_done_sound() {
     [ -f "$snd" ] || snd="/System/Library/Sounds/${snd}.aiff"
     [ -f "$snd" ] || return 0
     command -v afplay >/dev/null 2>&1 || return 0
-    afplay "$snd" >/dev/null 2>&1 &   # detached so the hook returns immediately
+    # Play in its own session, not just backgrounded. Claude tears down the hook's
+    # process group when this script returns; a plain "afplay &" is in that group
+    # and gets killed mid-sound, which made the chime intermittent. `setsid` (via
+    # perl, always present on macOS) moves it to a new session so it survives.
+    if command -v perl >/dev/null 2>&1; then
+        perl -e 'use POSIX qw(setsid); setsid(); exec @ARGV' \
+            afplay "$snd" >/dev/null 2>&1 </dev/null &
+    else
+        afplay "$snd" >/dev/null 2>&1 </dev/null &
+    fi
 }
 
 # --- window-name preservation -------------------------------------------------
