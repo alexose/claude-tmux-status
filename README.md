@@ -23,7 +23,11 @@ at a glance which of your windows is thinking, running a tool, or waiting on you
 | `<original>`   | default        | Claude Code exited                                 |
 
 The window's original name is saved on the first prompt of a turn and restored
-when Claude stops, so it survives switching away and back.
+when Claude stops, so it survives switching away and back. The name is stashed in
+a tmux window option (not a temp file), and while Claude owns the window its name
+is locked with `allow-rename off` / `automatic-rename off` so neither tmux nor the
+shell's title escapes can clobber your title — your prior settings are restored
+when Claude exits.
 
 ## How it works
 

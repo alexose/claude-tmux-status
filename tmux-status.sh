@@ -11,7 +11,9 @@
 #   <original>    default         Claude Code exited
 #
 # The window's pre-Claude name is saved on the first prompt of a turn and
-# restored when Claude stops, so switching away and back is lossless.
+# restored when Claude stops, so switching away and back is lossless. While
+# Claude owns the window its name is locked (allow-rename off) so the shell can't
+# clobber your title with "bash".
 #
 # Dependencies: tmux, jq. Silently no-ops when not inside tmux.
 
@@ -21,11 +23,21 @@ INPUT=$(cat)
 EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // empty')
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 
-# Use TMUX_PANE to target the correct window (the one Claude runs in)
-WINDOW_ID=$(tmux display-message -t "$TMUX_PANE" -p '#I' 2>/dev/null)
+# Resolve the pane's window by its unique id (e.g. "@5"), not its index — the
+# index gets reused as windows come and go, which would let stale state from a
+# previous window leak into a new one. Every `-t` below accepts this id.
+WINDOW_ID=$(tmux display-message -t "$TMUX_PANE" -p '#{window_id}' 2>/dev/null)
 [ -z "$WINDOW_ID" ] && exit 0
 
-SAVE_FILE="/tmp/claude-tmux-original-name-${WINDOW_ID}"
+# The original name and the pre-Claude rename settings live in tmux user options
+# *on the window object itself*, not a /tmp file. Tying them to the live window
+# means a killed session can't leave a stale file that later gets restored onto
+# an unrelated window — that was the "keeps reverting to bash" bug.
+NAME_OPT="@claude_orig_name"
+
+wopt()       { tmux show-window-options -t "$WINDOW_ID" -v "$1" 2>/dev/null; }
+set_wopt()   { tmux set-window-option -t "$WINDOW_ID" "$1" "$2"; }
+unset_wopt() { tmux set-window-option -t "$WINDOW_ID" -u "$1" 2>/dev/null; }
 
 set_active() {
     tmux set-window-option -t "$WINDOW_ID" window-status-current-style "reverse"
@@ -47,7 +59,7 @@ clear_style() {
 # Config (all optional, via environment):
 #   CLAUDE_TMUX_SOUND         Sound to play. A path, a bare macOS system-sound
 #                             name (e.g. "Glass"), or "off" to disable.
-#                             Default: Glass.
+#                             Default: Pop.
 #   CLAUDE_TMUX_TERMINAL_APP  Comma-separated macOS app name(s) to treat as
 #                             "your terminal" (e.g. "iTerm2" or "Ghostty,Code").
 #                             Auto-falls back to a list of common terminals —
@@ -99,24 +111,61 @@ play_done_sound() {
     afplay "$snd" >/dev/null 2>&1 &   # detached so the hook returns immediately
 }
 
+# --- window-name preservation -------------------------------------------------
+
+# Lock the window name so only this script changes it. automatic-rename off stops
+# tmux renaming the window after its foreground process; allow-rename off stops
+# programs in the pane (notably the shell's title escape sequences) from
+# overwriting it with things like "bash". Our own `tmux rename-window` still
+# works — allow-rename only gates in-band escape sequences. The pre-Claude values
+# are saved once so SessionEnd can hand the window back exactly as we found it.
+take_ownership() {
+    if [ -z "$(wopt @claude_saved_auto)" ]; then
+        set_wopt @claude_saved_auto  "$(wopt automatic-rename)"
+        set_wopt @claude_saved_allow "$(wopt allow-rename)"
+    fi
+    set_wopt automatic-rename off
+    set_wopt allow-rename off
+}
+
+release_ownership() {
+    local a r
+    a=$(wopt @claude_saved_auto); r=$(wopt @claude_saved_allow)
+    # Restoring automatic-rename to "on" intentionally lets tmux resume naming the
+    # window after its command — that's what a user with auto-rename on expects.
+    set_wopt automatic-rename "${a:-on}"
+    set_wopt allow-rename "${r:-on}"
+    unset_wopt @claude_saved_auto
+    unset_wopt @claude_saved_allow
+}
+
+# Remember your title once per turn-cycle. Only runs when nothing is stashed yet,
+# and never captures our own transient states, so an interrupted turn can't get a
+# tool name recorded as the "original".
+capture_name() {
+    [ -n "$(wopt "$NAME_OPT")" ] && return
+    local cur
+    cur=$(tmux display-message -t "$WINDOW_ID" -p '#W')
+    case "$cur" in ""|"thinking...") return ;; esac
+    set_wopt "$NAME_OPT" "$cur"
+}
+
+restore_name() {
+    local orig
+    orig=$(wopt "$NAME_OPT")
+    [ -n "$orig" ] && tmux rename-window -t "$WINDOW_ID" "$orig"
+    unset_wopt "$NAME_OPT"
+}
+
 case "$EVENT" in
     SessionStart)
-        # tmux's automatic-rename names a window after its foreground process.
-        # Claude Code sets its process title to its version (e.g. "2.1.204"), so
-        # tmux would name the window that until our first rename fires. Turn it
-        # off up front so the window keeps its real name and our states stick.
-        tmux set-window-option -t "$WINDOW_ID" automatic-rename off
+        # Take ownership of the window name up front so nothing (tmux auto-rename
+        # or the shell's title escapes) can clobber it while Claude runs here.
+        take_ownership
         ;;
     UserPromptSubmit)
-        # Save original window name before we start changing it. Guard against a
-        # name tmux already auto-set to Claude's process title (== pane command),
-        # so we never restore "2.1.204" as the "original" name.
-        if [ ! -f "$SAVE_FILE" ]; then
-            CURRENT=$(tmux display-message -t "$WINDOW_ID" -p '#W')
-            CMD=$(tmux display-message -t "$WINDOW_ID" -p '#{pane_current_command}')
-            [ "$CURRENT" = "$CMD" ] && CURRENT="zsh"
-            printf '%s' "$CURRENT" > "$SAVE_FILE"
-        fi
+        take_ownership          # in case the SessionStart event was missed
+        capture_name
         tmux rename-window -t "$WINDOW_ID" "thinking..."
         set_active
         ;;
@@ -128,21 +177,14 @@ case "$EVENT" in
     Stop|Notification)
         # Restore original window name with a "done" highlight
         set_done
-        if [ -f "$SAVE_FILE" ]; then
-            ORIGINAL=$(cat "$SAVE_FILE")
-            rm -f "$SAVE_FILE"
-            tmux rename-window -t "$WINDOW_ID" "$ORIGINAL"
-        fi
+        restore_name
         # Chime — but only when you're not already watching this window.
         should_play_sound && play_done_sound
         ;;
     SessionEnd)
-        # Clear all styling when Claude Code exits
+        # Clear styling, restore the name, and hand rename settings back.
         clear_style
-        if [ -f "$SAVE_FILE" ]; then
-            ORIGINAL=$(cat "$SAVE_FILE")
-            rm -f "$SAVE_FILE"
-            tmux rename-window -t "$WINDOW_ID" "$ORIGINAL"
-        fi
+        restore_name
+        release_ownership
         ;;
 esac
