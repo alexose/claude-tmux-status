@@ -183,6 +183,13 @@ background_running() {
     [ "${n:-0}" -gt 0 ]
 }
 
+# Count of background *agents* (sub-agents launched with run_in_background) still
+# running. In the Stop payload these are entries with type "subagent"; background
+# shell commands are type "shell", so they don't count toward the agent tally.
+running_agent_count() {
+    echo "$INPUT" | jq -r '[.background_tasks[]? | select(.type=="subagent" and .status=="running")] | length' 2>/dev/null
+}
+
 case "$EVENT" in
     SessionStart)
         # Take ownership of the window name up front so nothing (tmux auto-rename
@@ -209,10 +216,19 @@ case "$EVENT" in
         ;;
     Stop|Notification)
         if background_running; then
-            # The turn ended but background work is still going: show the real
-            # title in "busy" style and hold off on the chime / green until the
-            # last background task actually finishes.
-            restore_name
+            # The turn ended but background work is still going: hold off on the
+            # chime / green until the last background task actually finishes, and
+            # show what's still working in "busy" style.
+            AGENTS=$(running_agent_count)
+            if [ "${AGENTS:-0}" -ge 2 ]; then
+                tmux rename-window -t "$WINDOW_ID" "$AGENTS agents running..."
+            elif [ "${AGENTS:-0}" -eq 1 ]; then
+                tmux rename-window -t "$WINDOW_ID" "1 agent running..."
+            else
+                # only non-agent background work (e.g. a shell command) — keep
+                # your real title, just styled busy.
+                restore_name
+            fi
             set_active
             exit 0
         fi

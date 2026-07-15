@@ -33,10 +33,14 @@ when Claude exits.
 tasks launched with `run_in_background` are still working. The hook reads the
 `background_tasks` field from the `Stop` payload and, if anything is still
 running, holds the window in the "busy" style and defers the chime until the last
-background task actually finishes — so it won't signal "done" early. Likewise, a
-background sub-agent's tool calls fire `PreToolUse` in the same pane; those carry
-an `agent_id`, and the hook uses that to keep them from renaming your window to
-their tool (e.g. `bash`).
+background task actually finishes — so it won't signal "done" early. When the
+still-running work is background sub-agents, the window shows a live count —
+`2 agents running...` (or `1 agent running...`) — which ticks down as each agent
+finishes and only turns green once the last one is done. Background *shell*
+commands don't count toward that tally; if that's all that's left, your real
+title is shown (in the busy style) instead. Sub-agent tool calls also fire
+`PreToolUse` in the same pane; those carry an `agent_id`, and the hook uses that
+to keep them from renaming your window to their tool (e.g. `bash`).
 
 ## How it works
 
