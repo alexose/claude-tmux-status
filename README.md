@@ -22,12 +22,20 @@ at a glance which of your windows is thinking, running a tool, or waiting on you
 | `<original>`   | green          | Claude finished / is waiting for your input        |
 | `<original>`   | default        | Claude Code exited                                 |
 
-The window's original name is saved on the first prompt of a turn and restored
-when Claude stops, so it survives switching away and back. The name is stashed in
-a tmux window option (not a temp file), and while Claude owns the window its name
-is locked with `allow-rename off` / `automatic-rename off` so neither tmux nor the
-shell's title escapes can clobber your title — your prior settings are restored
-when Claude exits.
+The window's original name is captured when Claude starts and restored when it
+stops, so it survives switching away and back. The name is stashed in a tmux
+window option (not a temp file), and the window is locked with `allow-rename off`
+/ `automatic-rename off` so neither tmux nor the shell's title escapes can clobber
+your title. That lock **stays on** — the hook does not hand it back when Claude
+exits, because re-enabling `automatic-rename` lets tmux instantly re-clobber the
+title the moment the shell becomes the foreground process again.
+
+If tmux's auto-rename already overwrote your title *before* the hook first ran
+(e.g. the window shows `bash`, or `2.1.210` — Claude names its process after its
+version), the hook won't save that process name as your "title." It recognizes
+those artifacts — bare shell/interpreter names, version strings, a name matching
+the pane's command — and falls back to the working-directory basename instead. A
+title already mis-saved by an older version is healed the same way.
 
 **Background agents.** The `Stop` event fires when the main agent finishes even if
 tasks launched with `run_in_background` are still working. The hook reads the

@@ -126,49 +126,73 @@ play_done_sound() {
 
 # --- window-name preservation -------------------------------------------------
 
-# Lock the window name so only this script changes it. automatic-rename off stops
-# tmux renaming the window after its foreground process; allow-rename off stops
-# programs in the pane (notably the shell's title escape sequences) from
-# overwriting it with things like "bash". Our own `tmux rename-window` still
-# works — allow-rename only gates in-band escape sequences. The pre-Claude values
-# are saved once so SessionEnd can hand the window back exactly as we found it.
+# Lock the window name so ONLY this script ever changes it, and keep it that way.
+# automatic-rename off stops tmux naming the window after its foreground process —
+# which is how you get "bash" (the shell) or "2.1.210" (Claude sets its process
+# title to its version). allow-rename off stops programs in the pane (the shell's
+# title escapes) from doing the same. Our own `tmux rename-window` still works;
+# allow-rename only gates in-band escape sequences.
+#
+# We deliberately do NOT restore these to "on" when Claude exits. Handing
+# auto-rename back re-opens the door: the instant the shell (or a new Claude)
+# becomes the foreground process, tmux clobbers your title again. Staying locked
+# is the whole point — the window keeps whatever name it has until you change it.
 take_ownership() {
-    if [ -z "$(wopt @claude_saved_auto)" ]; then
-        set_wopt @claude_saved_auto  "$(wopt automatic-rename)"
-        set_wopt @claude_saved_allow "$(wopt allow-rename)"
-    fi
     set_wopt automatic-rename off
     set_wopt allow-rename off
 }
 
-release_ownership() {
-    local a r
-    a=$(wopt @claude_saved_auto); r=$(wopt @claude_saved_allow)
-    # Restoring automatic-rename to "on" intentionally lets tmux resume naming the
-    # window after its command — that's what a user with auto-rename on expects.
-    set_wopt automatic-rename "${a:-on}"
-    set_wopt allow-rename "${r:-on}"
-    unset_wopt @claude_saved_auto
-    unset_wopt @claude_saved_allow
+# A window name we must never treat as "your title" — it's a process artifact, not
+# something you chose: empty, one of our own state labels, a version string (Claude
+# names its process after its version), a name identical to the pane's foreground
+# command, or a bare shell/interpreter name (how tmux auto-rename produced "bash"
+# before we ever ran).
+is_bad_name() {
+    local n="$1" cmd="$2"
+    case "$n" in
+        ""|"thinking..."|*"agent running..."|*"agents running...") return 0 ;;
+        bash|zsh|sh|fish|node|python|python3|ruby|deno|bun|tmux) return 0 ;;
+    esac
+    [ "$n" = "$cmd" ] && return 0
+    case "$n" in [0-9]*.[0-9]*.[0-9]*) return 0 ;; esac   # looks like a version
+    return 1
 }
 
-# Remember your title once per session. Only runs when nothing is stashed yet, and
-# never captures our own transient states, so an interrupted turn can't get a tool
-# name recorded as the "original". The stash persists across Stop (see below) and
-# is only cleared at SessionEnd — a background agent finishing the turn used to
-# wipe it, after which nothing could be restored and the window stuck on "bash".
+# If the stash holds a process artifact (including ones captured by older versions
+# of this script, e.g. "2.1.210"/"bash"), replace it with the pane's directory
+# basename — a stable, meaningful window name. Never reads the *live* window name,
+# which during a turn is our own transient state, so it's safe to call any time.
+heal_stash() {
+    local saved
+    saved=$(wopt "$NAME_OPT")
+    [ -z "$saved" ] && return
+    if is_bad_name "$saved" "$(tmux display-message -t "$WINDOW_ID" -p '#{pane_current_command}')"; then
+        local dir; dir=$(tmux display-message -t "$WINDOW_ID" -p '#{b:pane_current_path}')
+        set_wopt "$NAME_OPT" "${dir:-shell}"
+    fi
+}
+
+# Capture your title once per session, from the IDLE window name (call before we
+# rename to a state). If that name is already a process artifact — because tmux
+# auto-renamed the window before Claude's first hook fired — fall back to the
+# directory basename rather than saving garbage.
 capture_name() {
+    heal_stash
     [ -n "$(wopt "$NAME_OPT")" ] && return
-    local cur
+    local cur cmd
     cur=$(tmux display-message -t "$WINDOW_ID" -p '#W')
-    case "$cur" in ""|"thinking...") return ;; esac
-    set_wopt "$NAME_OPT" "$cur"
+    cmd=$(tmux display-message -t "$WINDOW_ID" -p '#{pane_current_command}')
+    if is_bad_name "$cur" "$cmd"; then
+        cur=$(tmux display-message -t "$WINDOW_ID" -p '#{b:pane_current_path}')
+    fi
+    set_wopt "$NAME_OPT" "${cur:-shell}"
 }
 
 # Restore the saved title but KEEP it stashed — do not unset here. Stop can fire
 # more than once per turn (e.g. each time a background task hands control back),
 # and the original must survive every one of those until SessionEnd.
 restore_name() {
+    heal_stash
     local orig
     orig=$(wopt "$NAME_OPT")
     [ -n "$orig" ] && tmux rename-window -t "$WINDOW_ID" "$orig"
@@ -192,9 +216,11 @@ running_agent_count() {
 
 case "$EVENT" in
     SessionStart)
-        # Take ownership of the window name up front so nothing (tmux auto-rename
-        # or the shell's title escapes) can clobber it while Claude runs here.
+        # Lock the window up front, then grab the current name as early as possible
+        # (before we've renamed anything) so we capture your real title if it's
+        # still intact.
         take_ownership
+        capture_name
         ;;
     UserPromptSubmit)
         take_ownership          # in case the SessionStart event was missed
@@ -239,10 +265,13 @@ case "$EVENT" in
         should_play_sound && play_done_sound
         ;;
     SessionEnd)
-        # Clear styling, restore the name, drop the stash, hand rename settings back.
+        # Clear styling and restore the name. The window stays LOCKED (we don't turn
+        # automatic-rename / allow-rename back on) so the restored title can't be
+        # clobbered the moment the shell becomes the foreground process again.
         clear_style
         restore_name
         unset_wopt "$NAME_OPT"
-        release_ownership
+        unset_wopt @claude_saved_auto     # clean up bookkeeping from older versions
+        unset_wopt @claude_saved_allow
         ;;
 esac
