@@ -29,6 +29,15 @@ is locked with `allow-rename off` / `automatic-rename off` so neither tmux nor t
 shell's title escapes can clobber your title — your prior settings are restored
 when Claude exits.
 
+**Background agents.** The `Stop` event fires when the main agent finishes even if
+tasks launched with `run_in_background` are still working. The hook reads the
+`background_tasks` field from the `Stop` payload and, if anything is still
+running, holds the window in the "busy" style and defers the chime until the last
+background task actually finishes — so it won't signal "done" early. Likewise, a
+background sub-agent's tool calls fire `PreToolUse` in the same pane; those carry
+an `agent_id`, and the hook uses that to keep them from renaming your window to
+their tool (e.g. `bash`).
+
 ## How it works
 
 A single hook script, `tmux-status.sh`, is wired to five Claude Code hook events

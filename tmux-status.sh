@@ -22,6 +22,10 @@
 INPUT=$(cat)
 EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // empty')
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
+# Tool calls made *inside a subagent* fire PreToolUse in this same pane and carry
+# an agent_id; the main agent's calls don't. We use this to keep background agents
+# from clobbering your window title.
+AGENT_ID=$(echo "$INPUT" | jq -r '.agent_id // empty')
 
 # Resolve the pane's window by its unique id (e.g. "@5"), not its index — the
 # index gets reused as windows come and go, which would let stale state from a
@@ -148,9 +152,11 @@ release_ownership() {
     unset_wopt @claude_saved_allow
 }
 
-# Remember your title once per turn-cycle. Only runs when nothing is stashed yet,
-# and never captures our own transient states, so an interrupted turn can't get a
-# tool name recorded as the "original".
+# Remember your title once per session. Only runs when nothing is stashed yet, and
+# never captures our own transient states, so an interrupted turn can't get a tool
+# name recorded as the "original". The stash persists across Stop (see below) and
+# is only cleared at SessionEnd — a background agent finishing the turn used to
+# wipe it, after which nothing could be restored and the window stuck on "bash".
 capture_name() {
     [ -n "$(wopt "$NAME_OPT")" ] && return
     local cur
@@ -159,11 +165,22 @@ capture_name() {
     set_wopt "$NAME_OPT" "$cur"
 }
 
+# Restore the saved title but KEEP it stashed — do not unset here. Stop can fire
+# more than once per turn (e.g. each time a background task hands control back),
+# and the original must survive every one of those until SessionEnd.
 restore_name() {
     local orig
     orig=$(wopt "$NAME_OPT")
     [ -n "$orig" ] && tmux rename-window -t "$WINDOW_ID" "$orig"
-    unset_wopt "$NAME_OPT"
+}
+
+# True (0) when a background task (shell or agent launched with run_in_background)
+# is still running. Read from the Stop payload's background_tasks array — the turn
+# ended but the work hasn't, so we must not signal "done" yet.
+background_running() {
+    local n
+    n=$(echo "$INPUT" | jq -r '[.background_tasks[]? | select(.status=="running")] | length' 2>/dev/null)
+    [ "${n:-0}" -gt 0 ]
 }
 
 case "$EVENT" in
@@ -179,21 +196,37 @@ case "$EVENT" in
         set_active
         ;;
     PreToolUse)
-        TOOL_LOWER=$(echo "${TOOL:-tool}" | tr '[:upper:]' '[:lower:]')
-        tmux rename-window -t "$WINDOW_ID" "$TOOL_LOWER"
-        set_active
+        if [ -n "$AGENT_ID" ]; then
+            # A background/sub agent's tool call. Show "busy" but DON'T rename the
+            # window to its tool — that's what kept overwriting your title with
+            # "bash" while a background agent worked.
+            set_active
+        else
+            TOOL_LOWER=$(echo "${TOOL:-tool}" | tr '[:upper:]' '[:lower:]')
+            tmux rename-window -t "$WINDOW_ID" "$TOOL_LOWER"
+            set_active
+        fi
         ;;
     Stop|Notification)
-        # Restore original window name with a "done" highlight
+        if background_running; then
+            # The turn ended but background work is still going: show the real
+            # title in "busy" style and hold off on the chime / green until the
+            # last background task actually finishes.
+            restore_name
+            set_active
+            exit 0
+        fi
+        # Truly done: restore original window name with a "done" highlight.
         set_done
         restore_name
         # Chime — but only when you're not already watching this window.
         should_play_sound && play_done_sound
         ;;
     SessionEnd)
-        # Clear styling, restore the name, and hand rename settings back.
+        # Clear styling, restore the name, drop the stash, hand rename settings back.
         clear_style
         restore_name
+        unset_wopt "$NAME_OPT"
         release_ownership
         ;;
 esac
