@@ -2,11 +2,12 @@
 
 Show what [Claude Code](https://claude.com/claude-code) is doing right now, right in your **tmux status bar**.
 
-When Claude is running inside a tmux window, this hook renames and recolors that
-window's entry in the status bar to reflect Claude's live state — so you can tell
-at a glance which of your windows is thinking, running a tool, or waiting on you.
+When Claude is running inside a tmux window, this hook recolors that window's
+entry in the status bar to reflect Claude's live state — so you can tell at a
+glance which of your windows is busy versus waiting on you. It only changes the
+*color*; your window **name is left exactly as you set it**.
 
-![Demo of the tmux status bar tracking Claude Code's live state](demo.gif)
+![Demo (older version — the current hook only recolors, it no longer renames)](demo.gif)
 
 ```
 [0] 0:dash  1:b  2:mage  3:other  4:zsh  5:django  6:bash  7:zsh  8:zsh  9:bash*
@@ -15,48 +16,43 @@ at a glance which of your windows is thinking, running a tool, or waiting on you
 
 ## States
 
-| Window shows   | Style          | Meaning                                            |
-| -------------- | -------------- | -------------------------------------------------- |
-| `thinking...`  | reverse video  | Claude is processing your prompt                   |
-| `<tool-name>`  | reverse video  | Claude is running a tool (e.g. `bash`, `edit`)     |
-| `<original>`   | green          | Claude finished / is waiting for your input        |
-| `<original>`   | default        | Claude Code exited                                 |
+Your window **name never changes** — only its color in the status bar:
 
-The window's original name is captured when Claude starts and restored when it
-stops, so it survives switching away and back. The name is stashed in a tmux
-window option (not a temp file), and the window is locked with `allow-rename off`
-/ `automatic-rename off` so neither tmux nor the shell's title escapes can clobber
-your title. That lock **stays on** — the hook does not hand it back when Claude
-exits, because re-enabling `automatic-rename` lets tmux instantly re-clobber the
-title the moment the shell becomes the foreground process again.
+| Style         | Meaning                                        |
+| ------------- | ---------------------------------------------- |
+| reverse video | Claude is busy — thinking or running a tool    |
+| green         | Claude finished / is waiting for your input    |
+| default       | Claude Code exited (styling cleared)           |
 
-If tmux's auto-rename already overwrote your title *before* the hook first ran
-(e.g. the window shows `bash`, or `2.1.210` — Claude names its process after its
-version), the hook won't save that process name as your "title." It recognizes
-those artifacts — bare shell/interpreter names, version strings, a name matching
-the pane's command — and falls back to the working-directory basename instead. A
-title already mis-saved by an older version is healed the same way.
+## Your window name is left alone
+
+This hook **never renames your window** — it only recolors it. To make sure your
+title actually stays put, it also locks the window against the *other* things that
+would rename it:
+
+- tmux's `automatic-rename`, which names a window after its foreground process
+  (e.g. `bash`, or `2.1.210` — Claude names its process after its version), and
+- the shell's title escape sequences (`allow-rename`).
+
+Both are turned off for the window, so your title is preserved 100% of the time.
+The lock stays on even after Claude exits, so the name can't drift later either.
+If you actually want a window back on tmux auto-rename, run
+`tmux set-window-option automatic-rename on` for it.
 
 **Background agents.** The `Stop` event fires when the main agent finishes even if
 tasks launched with `run_in_background` are still working. The hook reads the
 `background_tasks` field from the `Stop` payload and, if anything is still
-running, holds the window in the "busy" style and defers the chime until the last
-background task actually finishes — so it won't signal "done" early. When the
-still-running work is background sub-agents, the window shows a live count —
-`2 agents running...` (or `1 agent running...`) — which ticks down as each agent
-finishes and only turns green once the last one is done. Background *shell*
-commands don't count toward that tally; if that's all that's left, your real
-title is shown (in the busy style) instead. Sub-agent tool calls also fire
-`PreToolUse` in the same pane; those carry an `agent_id`, and the hook uses that
-to keep them from renaming your window to their tool (e.g. `bash`).
+running, keeps the window in the "busy" color and defers the chime until the last
+background task finishes — so it won't signal "done" early.
 
 ## How it works
 
-A single hook script, `tmux-status.sh`, is wired to five Claude Code hook events
-(`UserPromptSubmit`, `PreToolUse`, `Stop`, `Notification`, `SessionEnd`). On each
-event it reads the event payload from stdin, figures out which tmux window it's
-running in (via `$TMUX_PANE`), and calls `tmux rename-window` /
-`set-window-option` accordingly. It's a no-op outside tmux.
+A single hook script, `tmux-status.sh`, is wired to six Claude Code hook events
+(`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, `Notification`,
+`SessionEnd`). On each event it reads the payload from stdin, figures out which
+tmux window it's running in (via `$TMUX_PANE`), and sets that window's *style*
+with `tmux set-window-option`. It never renames the window. It's a no-op outside
+tmux.
 
 All styling is applied dynamically by the script — **no `.tmux.conf` changes are
 required**.
@@ -114,7 +110,7 @@ If you'd rather not run the script:
 
 ## Uninstall
 
-Remove the five `~/.claude/hooks/tmux-status.sh` entries from the `hooks` block in
+Remove the `~/.claude/hooks/tmux-status.sh` entries from the `hooks` block in
 `~/.claude/settings.json` (or restore a `settings.json.bak.*` backup the installer
 made), and delete `~/.claude/hooks/tmux-status.sh`.
 
